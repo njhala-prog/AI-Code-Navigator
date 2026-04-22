@@ -1,6 +1,6 @@
 const fs = require('fs');
 const Code = require('../models/code');
-const { generateSummary, answerQuery } = require('../services/openaiservices');
+const { generateSummary, answerQuery, generateEmbedding } = require('../services/openaiservices');
 const { fetchRepo, processRepo } = require('../services/githubService');
 
 
@@ -21,11 +21,13 @@ const uploadRepo = async (req, res) => {
         console.log('Processed files:', processedFiles.length);
 
         for (const file of processedFiles) {
+            const embedding = await generateEmbedding(file.summary);
             const newCode = new Code({
                 fileName: file.fileName,
                 filePath: file.fileName,
                 code: file.code,
                 summary: file.summary,
+                embedding,
             });
             await newCode.save();
         }
@@ -50,7 +52,8 @@ const processCode = async (req, res) => {
 
     try {
         const summary = await generateSummary(code);
-        const newCode = new Code({ fileName, filePath, code, summary });
+        const embedding = await generateEmbedding(summary);
+        const newCode = new Code({ fileName, filePath, code, summary, embedding });
         await newCode.save();
         res.json({ summary });
     } catch (err) {
@@ -63,21 +66,37 @@ const searchCode = async (req, res) => {
     const { query } = req.body;
 
     try {
-        // Fetch all code documents from MongoDB
-        const codes = await Code.find({});
-        console.log('Fetched code documents:', codes); // Debugging: Log the number of files
+        const queryEmbedding = await generateEmbedding(query);
 
-        // Use summaries instead of full code to stay within token limits
-        const codeContext = codes.map((c) => `File: ${c.fileName}\nSummary:\n${c.summary}`).join('\n\n');
-        console.log('Code context:', codeContext); // Debugging: Log the first 100 characters of the context
+        const results = await Code.aggregate([
+            {
+                $vectorSearch: {
+                    index: 'vector_index',
+                    path: 'embedding',
+                    queryVector: queryEmbedding,
+                    numCandidates: 50,
+                    limit: 5,
+                },
+            },
+            {
+                $project: { fileName: 1, code: 1, summary: 1, _id: 0 },
+            },
+        ]);
 
-        // Use OpenAI to answer the query based on the entire codebase
+        if (results.length === 0) {
+            return res.json({ answer: 'No relevant files found for your query.' });
+        }
+
+        const codeContext = results
+            .map((c) => `File: ${c.fileName}\nCode:\n${c.code}`)
+            .join('\n\n---\n\n');
+
         const answer = await answerQuery(`Codebase:\n${codeContext}\n\nQuestion: ${query}`);
-        console.log('Answer generated:', answer); // Debugging: Log the answer
+        console.log('Answer generated:', answer);
 
-        res.json({ answer });
+        res.json({ answer, relevantFiles: results.map((r) => r.fileName) });
     } catch (err) {
-        console.error('Error in searchCode:', err); // Debugging: Log the full error
+        console.error('Error in searchCode:', err);
         res.status(500).json({ error: err.message });
     }
 };
@@ -103,14 +122,15 @@ const uploadCode = async (req, res) => {
 
             // Generate a summary for the file
             const summary = await generateSummary(code);
-            console.log('Summary generated:', summary); // Debugging: Log the summary
+            console.log('Summary generated:', summary);
+            const embedding = await generateEmbedding(summary);
 
-            // Save the file and summary to MongoDB
             const newCode = new Code({
                 fileName: file.originalname,
                 filePath: file.path,
                 code,
                 summary,
+                embedding,
             });
             await newCode.save();
             console.log('Code saved to MongoDB:', file.originalname); // Debugging: Log successful save
