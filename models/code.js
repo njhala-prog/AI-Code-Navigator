@@ -5,6 +5,7 @@ const codeSchema = new mongoose.Schema({
   filePath: String,
   code: String,
   summary: String,
+  embedding: [Number],
 });
 
 module.exports = mongoose.model('Code', codeSchema);
