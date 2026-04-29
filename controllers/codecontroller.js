@@ -1,7 +1,10 @@
 const fs = require('fs');
+const crypto = require('crypto');
 const Code = require('../models/code');
 const { generateSummary, answerQuery, generateEmbedding } = require('../services/openaiservices');
 const { fetchRepo, processRepo } = require('../services/githubService');
+
+const hashCode = (code) => crypto.createHash('sha256').update(code).digest('hex');
 
 
 
@@ -20,7 +23,16 @@ const uploadRepo = async (req, res) => {
         const processedFiles = await processRepo(buffer);
         console.log('Processed files:', processedFiles.length);
 
+        let saved = 0;
+        let skipped = 0;
+
         for (const file of processedFiles) {
+            const hash = hashCode(file.code);
+            const exists = await Code.exists({ contentHash: hash });
+            if (exists) {
+                skipped++;
+                continue;
+            }
             const embedding = await generateEmbedding(file.summary);
             const newCode = new Code({
                 fileName: file.fileName,
@@ -28,15 +40,18 @@ const uploadRepo = async (req, res) => {
                 code: file.code,
                 summary: file.summary,
                 embedding,
+                contentHash: hash,
             });
             await newCode.save();
+            saved++;
         }
 
         res.json({
             success: true,
-            message: 'Repository processed successfully',
+            message: `Repository processed. ${saved} files saved, ${skipped} duplicates skipped.`,
             totalFiles: processedFiles.length,
-            files: processedFiles.map(f => ({ fileName: f.fileName, summary: f.summary })),
+            saved,
+            skipped,
         });
     } catch (err) {
         console.error('Error in uploadRepo:', err);
@@ -51,13 +66,19 @@ const processCode = async (req, res) => {
     const { code, fileName, filePath } = req.body;
 
     try {
+        const hash = hashCode(code);
+        const existing = await Code.findOne({ contentHash: hash });
+        if (existing) {
+            return res.json({ summary: existing.summary, duplicate: true });
+        }
+
         const summary = await generateSummary(code);
         const embedding = await generateEmbedding(summary);
-        const newCode = new Code({ fileName, filePath, code, summary, embedding });
+        const newCode = new Code({ fileName, filePath, code, summary, embedding, contentHash: hash });
         await newCode.save();
-        res.json({ summary });
+        res.json({ summary, duplicate: false });
     } catch (err) {
-        console.error("Error in processCode:", err); // Add this line
+        console.error("Error in processCode:", err);
         res.status(500).json({ error: err.message || "Something went wrong!" });
     }
 };
@@ -114,13 +135,19 @@ const uploadCode = async (req, res) => {
 
         // Process each file
         for (const file of files) {
-            console.log('Processing file:', file.originalname); // Debugging: Log the file name
+            console.log('Processing file:', file.originalname);
 
-            // Read the uploaded file
             const code = fs.readFileSync(file.path, 'utf8');
-            console.log('Code read successfully:', code.substring(0, 50) + '...'); // Debugging: Log the first 50 characters of the code
+            fs.unlinkSync(file.path);
 
-            // Generate a summary for the file
+            const hash = hashCode(code);
+            const existing = await Code.findOne({ contentHash: hash });
+            if (existing) {
+                console.log('Duplicate skipped:', file.originalname);
+                summaries.push({ fileName: file.originalname, summary: existing.summary, duplicate: true });
+                continue;
+            }
+
             const summary = await generateSummary(code);
             console.log('Summary generated:', summary);
             const embedding = await generateEmbedding(summary);
@@ -131,15 +158,12 @@ const uploadCode = async (req, res) => {
                 code,
                 summary,
                 embedding,
+                contentHash: hash,
             });
             await newCode.save();
-            console.log('Code saved to MongoDB:', file.originalname); // Debugging: Log successful save
+            console.log('Code saved to MongoDB:', file.originalname);
 
-            // Delete the uploaded file after processing
-            fs.unlinkSync(file.path);
-            console.log('File deleted:', file.path); // Debugging: Log file deletion
-
-            summaries.push({ fileName: file.originalname, summary });
+            summaries.push({ fileName: file.originalname, summary, duplicate: false });
         }
 
         res.json({ summaries });
