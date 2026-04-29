@@ -6,6 +6,7 @@ const codeSchema = new mongoose.Schema({
   code: String,
   summary: String,
   embedding: [Number],
+  contentHash: { type: String, unique: true, sparse: true },
 });
 
 module.exports = mongoose.model('Code', codeSchema);
