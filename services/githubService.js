@@ -46,22 +46,49 @@ const fetchRepo = async (repoUrl) => {
   return buffer;
 };
 
+const BATCH_SIZE = 3;
+
+function chunkArray(arr, size) {
+  const chunks = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+}
+
 const processRepo = async (buffer) => {
   const zip = new AdmZip(buffer);
   const entries = zip.getEntries();
-  const results = [];
 
+  // Collect valid files first, before any async work
+  const validEntries = [];
   for (const entry of entries) {
     if (entry.isDirectory) continue;
-
     const ext = path.extname(entry.name).toLowerCase();
     if (!CODE_EXTENSIONS.has(ext)) continue;
-
     const code = entry.getData().toString('utf8');
     if (!code.trim() || code.length < 10) continue;
+    validEntries.push({ fileName: entry.entryName, code });
+  }
 
-    const summary = await generateSummary(code);
-    results.push({ fileName: entry.entryName, code, summary });
+  const results = [];
+  const batches = chunkArray(validEntries, BATCH_SIZE);
+
+  for (const batch of batches) {
+    const batchResults = await Promise.all(
+      batch.map(async ({ fileName, code }) => {
+        try {
+          const summary = await generateSummary(code);
+          return { fileName, code, summary };
+        } catch (err) {
+          console.warn(`Skipping ${fileName}: ${err.message}`);
+          return null;
+        }
+      })
+    );
+    for (const result of batchResults) {
+      if (result) results.push(result);
+    }
   }
 
   return results;
