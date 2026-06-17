@@ -12,6 +12,7 @@ const generateSummary = async (code) => {
     const safeCode = code.length > MAX_INPUT_CHARS
         ? code.slice(0, MAX_INPUT_CHARS) + '\n\n[truncated...]'
         : code;
+
     const response = await getClient().chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [

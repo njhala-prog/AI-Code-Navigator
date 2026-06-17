@@ -1,6 +1,7 @@
 const errorhandler = (err, req, res, next) => {
-    console.error(err.stack);
-    res.status(500).json({ error: 'Something went wrong!' });
+    const reqId = req.id || 'unknown';
+    console.error(`[${reqId}] Unhandled error:`, err.message);
+    res.status(500).json({ success: false, error: 'Internal server error', requestId: reqId });
 };
 
 module.exports = errorhandler;
