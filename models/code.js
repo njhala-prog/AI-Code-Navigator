@@ -8,6 +8,9 @@ const codeSchema = new mongoose.Schema(
         summary: String,
         embedding: [Number],
         contentHash: { type: String, unique: true, sparse: true },
+        fileHash: { type: String, index: true },
+        chunkName: { type: String, default: null },
+        chunkType: { type: String, enum: ['function', 'class', 'file'], default: 'file' },
     },
     { timestamps: true }
 );
